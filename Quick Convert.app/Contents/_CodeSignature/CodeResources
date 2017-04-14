@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>files</key>
+	<dict>
+		<key>Resources/CocoaAppletAppDelegate.scpt</key>
+		<data>
+		WpIPea1O36owAgNcPisutFIteHE=
+		</data>
+		<key>Resources/DAWindow.scpt</key>
+		<data>
+		USJqp0mL2J88mOlBoaMhv8xsYQI=
+		</data>
+		<key>Resources/English.lproj/InfoPlist.strings</key>
+		<data>
+		zmV6UqBSo6r1NOz798vd5O4zTBA=
+		</data>
+		<key>Resources/English.lproj/MainMenu.nib</key>
+		<data>
+		CYxSEi4xEUFDz7cCkJdrjCfC7Ng=
+		</data>
+		<key>Resources/applet.icns</key>
+		<data>
+		ez5PTamwlWyQuVWOkt8E21jsVkw=
+		</data>
+		<key>Resources/description.rtfd/TXT.rtf</key>
+		<data>
+		u6Gk9TAxvLVJnct2wxRwWbwZKv8=
+		</data>
+	</dict>
+	<key>rules</key>
+	<dict>
+		<key>^Resources/</key>
+		<true/>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>1100</real>
+		</dict>
+		<key>^Resources/Scripts/</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<integer>2000</integer>
+		</dict>
+		<key>^version.plist$</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
