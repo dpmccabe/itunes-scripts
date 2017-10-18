@@ -2,11 +2,11 @@ rm(list = ls())
 Sys.setlocale('LC_ALL','C')
 set.seed(1)
 
-library(plyr)
 library(dplyr)
 library(readr)
 library(tidyr)
 library(uuid)
+library(stringr)
 # library(ggplot2)
 # library(gridExtra)
 
@@ -21,13 +21,31 @@ assign_genre_cat <- Vectorize(function(genre) {
 }, USE.NAMES = F)
 
 hours <- as.integer(commandArgs(trailingOnly = T))
-if (length(hours) == 0) hours <- 12
+if (length(hours) == 0) hours <- 24
 seconds <- hours * 60 * 60
 
 cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
 
-tracks <- read_csv("~/Music/starred.csv", col_names = cn) %>% filter(last_played > 2) %>%
-  mutate(genre_cat = assign_genre_cat(genre), no = ifelse(is.na(grouping), NA, no)) %>%
+starred <- read_lines("~/Music/starred.txt")
+
+kvs <- starred %>% str_split("\\t")
+n_kvs <- sapply(kvs, length)
+
+now <- as.numeric(Sys.time())
+
+tracks <- kvs %>% unlist() %>% str_split(":=", simplify = T) %>% as_data_frame() %>%
+  rename(k = V1, v = V2) %>%
+  mutate(ix = rep(1:length(kvs), times = n_kvs)) %>%
+  spread(key = k, value = v) %>%
+  select(id = `Track ID`, genre = Genre, duration = `Total Time`, rating = Rating, plays = `Play Count`,
+         last_played = `Play Date UTC`, grouping = Grouping, no = `Track Number`) %>%
+  mutate(last_played = (now - as.numeric(strptime(last_played, format = "%FT%TZ", tz = "GMT"))) / 60 / 60 / 24) %>%
+  filter(last_played > 0) %>%
+  type_convert %>%
+  mutate(genre_cat = assign_genre_cat(genre),
+         duration = duration / 1000,
+         no = ifelse(is.na(grouping), NA, no),
+         rating = as.integer(rating / 20)) %>%
   group_by(grouping) %>% mutate(ref = ifelse(is.na(no) | no == 1, T, F)) %>% ungroup()
 
 N <- nrow(tracks)
@@ -39,8 +57,8 @@ gr_fixed_props <- gr_props %>% group_by(genre_cat) %>%
   mutate(marg_prop = prop / sum(prop)) %>% ungroup() %>% select(genre_cat, rating, marg_prop) %>%
   spread(key = rating, value = marg_prop) %>%
   mutate(sum45 = `4` + `5`, marg4 = `4` / sum45, marg5 = `5` / sum45) %>%
-  mutate(sum45 = (sum45 * 1/4 + 0.5 * 3/4), `3` = 1 - sum45) %>%
-  mutate(marg5 = (marg5 * 2/5 + 0.5 * 3/5), marg4 = 1 - marg5) %>%
+  mutate(sum45 = (sum45 * 2 + 0.5 * 4) / 6, `3` = 1 - sum45) %>%
+  mutate(marg5 = (marg5 * 2 + 0.5 * 3) / 5, marg4 = 1 - marg5) %>%
   mutate(`4` = marg4 * sum45, `5` = marg5 * sum45) %>%
   select(-marg5, -marg4, -sum45) %>%
   gather(`3`:`5`, key = "rating", value = "final_prop", convert = T) %>%
@@ -48,7 +66,7 @@ gr_fixed_props <- gr_props %>% group_by(genre_cat) %>%
 
 props <- gr_fixed_props %>% filter(final_prop > 0) %>%
   mutate(final_prop = ifelse(genre_cat == "Classical", final_prop * 0.25, final_prop * 0.375)) %>%
-  mutate(min_prop = final_prop * 0.85, max_prop = final_prop * 1.15) %>%
+  mutate(min_prop = final_prop * 0.9, max_prop = final_prop / 0.9) %>%
   mutate(min_seconds = seconds * min_prop, max_seconds = seconds * max_prop)
 
 gtracks <- tracks
@@ -56,17 +74,19 @@ gtracks <- tracks
 gtracks_nonref <- filter(gtracks, !ref)
 gtracks <- filter(gtracks, ref)
 
-gtracks <- gtracks %>% group_by(rating) %>%
+gtracks <- gtracks %>% group_by(rating, genre_cat) %>%
   mutate(plays_q = cut(plays, labels = F, include.lowest = T,
                        breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
   mutate(plays_q = plays_q - min(plays_q), plays_q = 1 - plays_q / max(plays_q)) %>%
   mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
                     breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
   mutate(lp_q = lp_q - min(lp_q), lp_q = lp_q / max(lp_q)) %>%
-  mutate(sprob = plays_q^(1 / 2) * lp_q^(1 / 3)) %>%
+  mutate(sprob = plays_q^5 + lp_q^2) %>%
+  mutate(sprob = sprob - min(sprob), sprob = sprob / max(sprob)) %>%
+  mutate(sprob_q = cut(sprob, labels = F, include.lowest = T,
+                       breaks = unique(quantile(sprob, probs = seq(0, 1, 0.1))))) %>%
   ungroup() %>%
-  mutate(sprob = sprob + rnorm(nrow(gtracks), 0, 0.05)) %>%
-  mutate(sprob = sprob - min(sprob), sprob = sprob / max(sprob))
+  mutate(sprob = sprob + rnorm(nrow(.), 0, 0.05))
 
 gtracks_nonref <- gtracks_nonref %>% left_join(gtracks %>% select(grouping, sprob), by = "grouping")
 
@@ -96,12 +116,13 @@ while(T) {
   }
 }
 
-# plots <- alply(1:nrow(prop_status), 1, function(i) {
+# make_plots <- function(i) {
 #   p <- ggplot(etracks %>% filter(rating == prop_status$rating[i], genre_cat == prop_status$genre_cat[i]),
 #               aes(last_played, plays, color = chosen, alpha = chosen)) + geom_point(show.legend = F) +
 #     ggtitle(paste(prop_status$rating[i], prop_status$genre_cat[i]))
 #   return(p)
-# })
+# }
+# plots <- purrr::map(1:nrow(prop_status), make_plots)
 # do.call(grid.arrange, c(plots, ncol = 3))
 
 ptracks <- filter(etracks, chosen)
