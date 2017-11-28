@@ -112,14 +112,18 @@ ideal_seconds_rating <- ideal_seconds %>%
   group_by(rating) %>%
   summarize(max_dur = sum(max_dur))
 
-dim_weights <- c("plays" = 2, "lp" = 1)
+dim_weights <- c("plays" = 3, "lp" = 1)
 dim_weights <- dim_weights / sum(dim_weights)
 
 gtracks_within <- tracks_simp %>%
   group_by(genre_cat, rating) %>%
-  mutate(plays_q = plays - min(plays)) %>%
+  mutate(plays_q = cut(plays, labels = F, include.lowest = T,
+                       breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
+  mutate(plays_q = plays_q - min(plays_q)) %>%
   mutate(plays_q = 1 - plays_q / max(plays_q)) %>%
-  mutate(lp_q = last_played - min(last_played)) %>%
+  mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
+                    breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
+  mutate(lp_q = lp_q - min(lp_q)) %>%
   mutate(lp_q = lp_q / max(lp_q)) %>%
   mutate(dfc = sqrt((1 - plays_q)^2 * dim_weights["plays"] + (1 - lp_q)^2 * dim_weights["lp"])) %>%
   arrange(genre_cat, rating, dfc) %>%
@@ -131,9 +135,13 @@ gtracks_within <- tracks_simp %>%
 
 gtracks_within_gc <- tracks_simp %>%
   group_by(genre_cat) %>%
-  mutate(plays_q = plays - min(plays)) %>%
+  mutate(plays_q = cut(plays, labels = F, include.lowest = T,
+                       breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
+  mutate(plays_q = plays_q - min(plays_q)) %>%
   mutate(plays_q = 1 - plays_q / max(plays_q)) %>%
-  mutate(lp_q = last_played - min(last_played)) %>%
+  mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
+                    breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
+  mutate(lp_q = lp_q - min(lp_q)) %>%
   mutate(lp_q = lp_q / max(lp_q)) %>%
   mutate(dfc = sqrt((1 - plays_q)^2 * dim_weights["plays"] + (1 - lp_q)^2 * dim_weights["lp"])) %>%
   left_join(rating_weights_df, by = "rating") %>%
@@ -147,9 +155,13 @@ gtracks_within_gc <- tracks_simp %>%
 
 gtracks_within_rating <- tracks_simp %>%
   group_by(rating) %>%
-  mutate(plays_q = plays - min(plays)) %>%
+  mutate(plays_q = cut(plays, labels = F, include.lowest = T,
+                       breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
+  mutate(plays_q = plays_q - min(plays_q)) %>%
   mutate(plays_q = 1 - plays_q / max(plays_q)) %>%
-  mutate(lp_q = last_played - min(last_played)) %>%
+  mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
+                    breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
+  mutate(lp_q = lp_q - min(lp_q)) %>%
   mutate(lp_q = lp_q / max(lp_q)) %>%
   mutate(dfc = sqrt((1 - plays_q)^2 * dim_weights["plays"] + (1 - lp_q)^2 * dim_weights["lp"])) %>%
   left_join(gc_weights_df, by = "genre_cat") %>%
