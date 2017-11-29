@@ -25,8 +25,16 @@ assign_genre_cat <- Vectorize(function(genre) {
   }
 }, USE.NAMES = F)
 
+make_q <- function(d, comp = F) {
+  quants <- quantile(d, probs = seq(0, 1, length.out = 21))
+  q <- cut(d, labels = F, include.lowest = T, breaks = unique(quants))
+  q <- q / max(q)
+  if (comp) q <- 1 - (q - min(q))
+  return(q)
+}
+
 hours <- as.integer(commandArgs(trailingOnly = T))
-if (length(hours) == 0) hours <- 24
+if (length(hours) == 0) hours <- 12
 seconds <- hours * 60 * 60
 
 cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
@@ -112,20 +120,14 @@ ideal_seconds_rating <- ideal_seconds %>%
   group_by(rating) %>%
   summarize(max_dur = sum(max_dur))
 
-dim_weights <- c("plays" = 3, "lp" = 1)
+dim_weights <- c("plays" = 1/2, "lp" = 1/4)
 dim_weights <- dim_weights / sum(dim_weights)
 
 gtracks_within <- tracks_simp %>%
   group_by(genre_cat, rating) %>%
-  mutate(plays_q = cut(plays, labels = F, include.lowest = T,
-                       breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
-  mutate(plays_q = plays_q - min(plays_q)) %>%
-  mutate(plays_q = 1 - plays_q / max(plays_q)) %>%
-  mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
-                    breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
-  mutate(lp_q = lp_q - min(lp_q)) %>%
-  mutate(lp_q = lp_q / max(lp_q)) %>%
-  mutate(dfc = sqrt((1 - plays_q)^2 * dim_weights["plays"] + (1 - lp_q)^2 * dim_weights["lp"])) %>%
+  mutate(plays_q = make_q(plays, comp = T)) %>%
+  mutate(lp_q = make_q(last_played)) %>%
+  mutate(dfc = 1 - plays_q^dim_weights["plays"] * lp_q^dim_weights["lp"]) %>%
   arrange(genre_cat, rating, dfc) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
@@ -135,15 +137,9 @@ gtracks_within <- tracks_simp %>%
 
 gtracks_within_gc <- tracks_simp %>%
   group_by(genre_cat) %>%
-  mutate(plays_q = cut(plays, labels = F, include.lowest = T,
-                       breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
-  mutate(plays_q = plays_q - min(plays_q)) %>%
-  mutate(plays_q = 1 - plays_q / max(plays_q)) %>%
-  mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
-                    breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
-  mutate(lp_q = lp_q - min(lp_q)) %>%
-  mutate(lp_q = lp_q / max(lp_q)) %>%
-  mutate(dfc = sqrt((1 - plays_q)^2 * dim_weights["plays"] + (1 - lp_q)^2 * dim_weights["lp"])) %>%
+  mutate(plays_q = make_q(plays, comp = T)) %>%
+  mutate(lp_q = make_q(last_played)) %>%
+  mutate(dfc = 1 - plays_q^dim_weights["plays"] * lp_q^dim_weights["lp"]) %>%
   left_join(rating_weights_df, by = "rating") %>%
   mutate(dfc_w = dfc / rating_w) %>%
   arrange(genre_cat, dfc_w) %>%
@@ -155,15 +151,9 @@ gtracks_within_gc <- tracks_simp %>%
 
 gtracks_within_rating <- tracks_simp %>%
   group_by(rating) %>%
-  mutate(plays_q = cut(plays, labels = F, include.lowest = T,
-                       breaks = unique(quantile(plays, probs = seq(0, 1, 0.01))))) %>%
-  mutate(plays_q = plays_q - min(plays_q)) %>%
-  mutate(plays_q = 1 - plays_q / max(plays_q)) %>%
-  mutate(lp_q = cut(last_played, labels = F, include.lowest = T,
-                    breaks = unique(quantile(last_played, probs = seq(0, 1, 0.01))))) %>%
-  mutate(lp_q = lp_q - min(lp_q)) %>%
-  mutate(lp_q = lp_q / max(lp_q)) %>%
-  mutate(dfc = sqrt((1 - plays_q)^2 * dim_weights["plays"] + (1 - lp_q)^2 * dim_weights["lp"])) %>%
+  mutate(plays_q = make_q(plays, comp = T)) %>%
+  mutate(lp_q = make_q(last_played)) %>%
+  mutate(dfc = 1 - plays_q^dim_weights["plays"] * lp_q^dim_weights["lp"]) %>%
   left_join(gc_weights_df, by = "genre_cat") %>%
   mutate(dfc_w = dfc / gc_w) %>%
   arrange(rating, dfc_w) %>%
@@ -183,6 +173,7 @@ if (debug) {
   chosen_tracks %>% group_by(chosen_within, chosen_within_gc, chosen_within_rating) %>% count()
   chosen_tracks %>% filter(genre_cat=="Classical",rating==5)
   chosen_tracks %>% filter(!chosen_within, chosen_within_gc, chosen_within_rating)
+  chosen_tracks %>% filter(chosen_within, !chosen_within_gc, !chosen_within_rating)
   sum((chosen_tracks %>% filter(chosen))$duration) / seconds
 
   chosen_prop_mat <- chosen_tracks %>%
@@ -210,9 +201,10 @@ if (debug) {
       filter(rating == grid_space$rating[i], genre_cat == grid_space$genre_cat[i]) %>%
       arrange(desc(chosen))
 
-    p <- ggplot(d, aes(last_played, plays, color = chosen)) +
-      geom_point(show.legend = F, size = 0.5) +
+    p <- ggplot(d, aes(last_played, plays, color = chosen, alpha = chosen)) +
+      geom_jitter(show.legend = F, size = 0.5) +
       scale_color_manual(values = c("#88dddd", "#550000")) +
+      scale_alpha_manual(values = c(0.5, 1)) +
       ggtitle(paste(grid_space$rating[i], grid_space$genre_cat[i])) +
       xlim(c(0, max_lp)) + ylim(c(0, max_plays)) +
       ggthemes::theme_few()
@@ -224,31 +216,35 @@ if (debug) {
 }
 
 ptracks <- filter(chosen_tracks, chosen) %>%
+  select(-matches("chosen")) %>%
   group_by(gid) %>%
-  mutate(uuid = uuid::UUIDgenerate()) %>%
+  mutate(uuid = stringi::stri_rand_strings(n(), 10)) %>%
   ungroup()
 
-oc_ptracks <- ptracks %>%
+exploded_tracks <- bind_rows(tracks_ungrouped, tracks_grouped) %>%
+  select(gid, id, no) %>%
+  inner_join(ptracks, by = "gid") %>%
+  mutate(id = ifelse(is.na(id), gid, id))
+
+oc_ptracks <- exploded_tracks %>%
   filter(genre_cat != "Classical") %>%
-  mutate(i = as.integer(factor(rank(uuid, ties.method = "min")))) %>%
+  mutate(i = as.double(factor(rank(uuid, ties.method = "min")))) %>%
   select(-uuid)
-classical_ptracks <- ptracks %>%
+classical_ptracks <- exploded_tracks %>%
   filter(genre_cat == "Classical") %>%
   mutate(i = as.integer(factor(rank(uuid, ties.method = "min"))) - 1) %>%
   select(-uuid) %>%
-  mutate(i = round(5 + i * (max(oc_ptracks$i) - 10) / max(i)))
+  mutate(i = round(5 + i * (max(oc_ptracks$i) - 5) / max(i)))
 
-fudges <- select(classical_ptracks, i) %>%
+fudges <- classical_ptracks %>%
+  distinct(gid) %>%
   mutate(fudge = sample(-2:2, size = n(), replace = T) + 0.1)
-classical_ptracks <- left_join(classical_ptracks, fudges, by = "i") %>%
-  mutate(i = i + fudge) %>% select(-fudge)
+classical_ptracks_fudged <- classical_ptracks %>%
+  left_join(fudges, by = "gid") %>%
+  mutate(i = i + fudge) %>%
+  select(-fudge)
 
-ftracks <- bind_rows(classical_ptracks, oc_ptracks)
+ftracks <- bind_rows(classical_ptracks_fudged, oc_ptracks) %>%
+  arrange(i, no)
 
-btracks <- bind_rows(tracks_ungrouped, tracks_grouped) %>%
-  select(gid, id, no) %>%
-  inner_join(ftracks, by = "gid") %>%
-  arrange(i, no) %>%
-  mutate(id = ifelse(is.na(id), gid, id))
-
-write(paste0(btracks$id, collapse = ","), file = "~/Music/phone_ids.txt")
+write(paste0(ftracks$id, collapse = ","), file = "~/Music/phone_ids.txt")
