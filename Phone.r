@@ -1,6 +1,6 @@
 rm(list = ls())
 Sys.setlocale('LC_ALL','C')
-set.seed(1)
+# set.seed(1)
 
 library(dplyr)
 library(readr)
@@ -25,16 +25,8 @@ assign_genre_cat <- Vectorize(function(genre) {
   }
 }, USE.NAMES = F)
 
-make_q <- function(d, comp = F) {
-  quants <- quantile(d, probs = seq(0, 1, length.out = 21))
-  q <- cut(d, labels = F, include.lowest = T, breaks = unique(quants))
-  q <- q / max(q)
-  if (comp) q <- 1 - (q - min(q))
-  return(q)
-}
-
 hours <- as.integer(commandArgs(trailingOnly = T))
-if (length(hours) == 0) hours <- 12
+if (length(hours) == 0) hours <- 8
 seconds <- hours * 60 * 60
 
 cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
@@ -53,7 +45,6 @@ tracks <- kvs %>% unlist() %>% str_split(":=", simplify = T) %>% as_data_frame()
   select(id = `Track ID`, genre = Genre, duration = `Total Time`, rating = Rating, plays = `Play Count`,
          last_played = `Play Date UTC`, grouping = Grouping, no = `Track Number`) %>%
   mutate(last_played = (now - as.numeric(strptime(last_played, format = "%FT%TZ", tz = "GMT"))) / 60 / 60 / 24) %>%
-  filter(last_played > 1) %>%
   type_convert %>%
   mutate(genre_cat = assign_genre_cat(genre),
          duration = duration / 1000,
@@ -76,7 +67,8 @@ tracks_grouped_comb <- tracks_grouped %>%
   group_by(gid) %>%
   summarize(genre_cat = genre_cat[1], rating = rating[1], duration = sum(duration), plays = plays[1], last_played = last_played[1])
 
-tracks_simp <- bind_rows(tracks_grouped_comb, tracks_ungrouped)
+tracks_simp <- bind_rows(tracks_grouped_comb, tracks_ungrouped) %>%
+  filter(last_played > 1)
 
 emp_props <- tracks_simp %>%
   group_by(genre_cat, rating) %>%
@@ -120,29 +112,57 @@ ideal_seconds_rating <- ideal_seconds %>%
   group_by(rating) %>%
   summarize(max_dur = sum(max_dur))
 
-dim_weights <- c("plays" = 1/2, "lp" = 1/4)
-dim_weights <- dim_weights / sum(dim_weights)
+make_q <- function(d, comp = F) {
+  q <- d / max(d)
+  q <- q - min(q) / 2
+
+  if (comp) q <- 1 - q
+  return(q)
+}
+
+get_exponent <- Vectorize(function(x, y, w) {
+  f <- function (a, x, y, w) { x^a + y^(a * w) - 1 }
+  a_hat <- uniroot(f, interval = c(0, 10), x = x, y = y, w = w)
+  return(a_hat$root)
+}, vectorize.args = list("x", "y"), USE.NAMES = F)
+
+plays_weight <- 5
 
 gtracks_within <- tracks_simp %>%
   group_by(genre_cat, rating) %>%
   mutate(plays_q = make_q(plays, comp = T)) %>%
   mutate(lp_q = make_q(last_played)) %>%
-  mutate(dfc = 1 - plays_q^dim_weights["plays"] * lp_q^dim_weights["lp"]) %>%
-  arrange(genre_cat, rating, dfc) %>%
+  mutate(dfc = get_exponent(lp_q, plays_q, w = plays_weight)) %>%
+  arrange(genre_cat, rating, desc(dfc)) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
   left_join(ideal_seconds, by = c("genre_cat", "rating")) %>%
   mutate(chosen = cs <= max_dur) %>%
   ungroup()
 
+if (debug) {
+  g <- filter(gtracks_within, genre_cat == "Classical", rating == 3)
+  p1 <- ggplot(g, aes(last_played, -plays, color = chosen, alpha = chosen)) +
+    geom_jitter(show.legend = F, size = 0.5) +
+    scale_color_manual(values = c("#88dddd", "#550000")) +
+    scale_alpha_manual(values = c(0.5, 1)) +
+    ggthemes::theme_few()
+  p2 <- ggplot(g, aes(lp_q, plays_q, color = chosen, alpha = chosen)) +
+    geom_jitter(show.legend = F, size = 0.5) +
+    scale_color_manual(values = c("#88dddd", "#550000")) +
+    scale_alpha_manual(values = c(0.5, 1)) +
+    ggthemes::theme_few()
+  grid.arrange(p1, p2)
+}
+
 gtracks_within_gc <- tracks_simp %>%
   group_by(genre_cat) %>%
   mutate(plays_q = make_q(plays, comp = T)) %>%
   mutate(lp_q = make_q(last_played)) %>%
-  mutate(dfc = 1 - plays_q^dim_weights["plays"] * lp_q^dim_weights["lp"]) %>%
+  mutate(dfc = get_exponent(lp_q, plays_q, w = plays_weight)) %>%
   left_join(rating_weights_df, by = "rating") %>%
-  mutate(dfc_w = dfc / rating_w) %>%
-  arrange(genre_cat, dfc_w) %>%
+  mutate(dfc_w = dfc * rating_w) %>%
+  arrange(genre_cat, desc(dfc_w)) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
   left_join(ideal_seconds_gc, by = "genre_cat") %>%
@@ -153,10 +173,10 @@ gtracks_within_rating <- tracks_simp %>%
   group_by(rating) %>%
   mutate(plays_q = make_q(plays, comp = T)) %>%
   mutate(lp_q = make_q(last_played)) %>%
-  mutate(dfc = 1 - plays_q^dim_weights["plays"] * lp_q^dim_weights["lp"]) %>%
+  mutate(dfc = get_exponent(lp_q, plays_q, w = plays_weight)) %>%
   left_join(gc_weights_df, by = "genre_cat") %>%
-  mutate(dfc_w = dfc / gc_w) %>%
-  arrange(rating, dfc_w) %>%
+  mutate(dfc_w = dfc * gc_w) %>%
+  arrange(rating, desc(dfc_w)) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
   left_join(ideal_seconds_rating, by = "rating") %>%
@@ -171,7 +191,7 @@ chosen_tracks <- tracks_simp %>%
 
 if (debug) {
   chosen_tracks %>% group_by(chosen_within, chosen_within_gc, chosen_within_rating) %>% count()
-  chosen_tracks %>% filter(genre_cat=="Classical",rating==5)
+  chosen_tracks %>% filter(genre_cat=="Celtic",rating==3)
   chosen_tracks %>% filter(!chosen_within, chosen_within_gc, chosen_within_rating)
   chosen_tracks %>% filter(chosen_within, !chosen_within_gc, !chosen_within_rating)
   sum((chosen_tracks %>% filter(chosen))$duration) / seconds
@@ -201,12 +221,12 @@ if (debug) {
       filter(rating == grid_space$rating[i], genre_cat == grid_space$genre_cat[i]) %>%
       arrange(desc(chosen))
 
-    p <- ggplot(d, aes(last_played, plays, color = chosen, alpha = chosen)) +
+    p <- ggplot(d, aes(last_played, -plays, color = chosen, alpha = chosen)) +
       geom_jitter(show.legend = F, size = 0.5) +
       scale_color_manual(values = c("#88dddd", "#550000")) +
       scale_alpha_manual(values = c(0.5, 1)) +
       ggtitle(paste(grid_space$rating[i], grid_space$genre_cat[i])) +
-      xlim(c(0, max_lp)) + ylim(c(0, max_plays)) +
+      xlim(c(0, max_lp)) + ylim(c(-max_plays, 0)) +
       ggthemes::theme_few()
     return(p)
   }
@@ -219,32 +239,23 @@ ptracks <- filter(chosen_tracks, chosen) %>%
   select(-matches("chosen")) %>%
   group_by(gid) %>%
   mutate(uuid = stringi::stri_rand_strings(n(), 10)) %>%
-  ungroup()
+  ungroup() %>%
+  arrange(uuid) %>%
+  inner_join(
+    tracks %>% select(id, genre),
+    by = c("gid" = "id")
+  ) %>%
+  group_by(genre_cat) %>%
+  mutate(j = 1:n()) %>%
+  mutate(j = j / max(j)) %>%
+  ungroup() %>%
+  mutate(j = j + rnorm(n(), 0, 0.01)) %>%
+  arrange(j)
 
 exploded_tracks <- bind_rows(tracks_ungrouped, tracks_grouped) %>%
   select(gid, id, no) %>%
   inner_join(ptracks, by = "gid") %>%
-  mutate(id = ifelse(is.na(id), gid, id))
+  mutate(id = ifelse(is.na(id), gid, id)) %>%
+  arrange(j, no)
 
-oc_ptracks <- exploded_tracks %>%
-  filter(genre_cat != "Classical") %>%
-  mutate(i = as.double(factor(rank(uuid, ties.method = "min")))) %>%
-  select(-uuid)
-classical_ptracks <- exploded_tracks %>%
-  filter(genre_cat == "Classical") %>%
-  mutate(i = as.integer(factor(rank(uuid, ties.method = "min"))) - 1) %>%
-  select(-uuid) %>%
-  mutate(i = round(5 + i * (max(oc_ptracks$i) - 5) / max(i)))
-
-fudges <- classical_ptracks %>%
-  distinct(gid) %>%
-  mutate(fudge = sample(-2:2, size = n(), replace = T) + 0.1)
-classical_ptracks_fudged <- classical_ptracks %>%
-  left_join(fudges, by = "gid") %>%
-  mutate(i = i + fudge) %>%
-  select(-fudge)
-
-ftracks <- bind_rows(classical_ptracks_fudged, oc_ptracks) %>%
-  arrange(i, no)
-
-write(paste0(ftracks$id, collapse = ","), file = "~/Music/phone_ids.txt")
+write(paste0(exploded_tracks$id, collapse = ","), file = "~/Music/phone_ids.txt")
