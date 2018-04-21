@@ -13,6 +13,7 @@ debug <- F
 if (debug) {
   library(ggplot2)
   library(gridExtra)
+  library(ggthemes)
 }
 
 assign_genre_cat <- Vectorize(function(genre) {
@@ -237,24 +238,51 @@ if (debug) {
 
 ptracks <- filter(chosen_tracks, chosen) %>%
   select(-matches("chosen")) %>%
-  group_by(gid) %>%
   mutate(uuid = stringi::stri_rand_strings(n(), 10)) %>%
-  ungroup() %>%
   arrange(uuid) %>%
   inner_join(
     tracks %>% select(id, genre),
     by = c("gid" = "id")
   ) %>%
+  mutate(gc_rating = paste(genre_cat, rating, sep = "-"))
+
+ptracks_gcr <- split(ptracks, ptracks$gc_rating)
+
+interleave <- function(d, arrange_col) {
+  d %>%
+    arrange_(arrange_col) %>%
+    mutate(j = 1:n() / n()) %>%
+    mutate(
+      b1 = lag(j, default = 0),
+      b2 = j
+    ) %>%
+    mutate(j = runif(n(), b1, b2)) %>%
+    select(-b1, -b2)
+}
+
+ptracks_gcr_j <- lapply(ptracks_gcr, interleave, arrange_col = "uuid")
+
+ptracks_joined <- bind_rows(ptracks_gcr_j) %>%
   group_by(genre_cat) %>%
-  mutate(j = 1:n()) %>%
-  mutate(j = j / max(j)) %>%
-  ungroup() %>%
-  mutate(j = j + rnorm(n(), 0, 0.01)) %>%
-  arrange(j)
+  arrange(genre_cat, j) %>%
+  mutate(l = 1:n()) %>%
+  ungroup()
+
+ptracks_gc <- split(ptracks_joined, ptracks_joined$genre_cat)
+
+ptracks_gc_j <- lapply(ptracks_gc, interleave, arrange_col = "l")
+
+ptracks_joined <- bind_rows(ptracks_gc_j)
+
+if (debug) {
+  ggplot(ptracks_joined, aes(x = rank(j), y = rating, color = genre_cat)) +
+    geom_point() +
+    theme_few()
+}
 
 exploded_tracks <- bind_rows(tracks_ungrouped, tracks_grouped) %>%
   select(gid, id, no) %>%
-  inner_join(ptracks, by = "gid") %>%
+  inner_join(ptracks_joined, by = "gid") %>%
   mutate(id = ifelse(is.na(id), gid, id)) %>%
   arrange(j, no)
 
