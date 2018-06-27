@@ -7,6 +7,7 @@ library(readr)
 library(tidyr)
 library(stringr)
 library(tibble)
+library(purrr)
 
 debug <- F
 # debug <- T
@@ -27,7 +28,7 @@ assign_genre_cat <- Vectorize(function(genre) {
 }, USE.NAMES = F)
 
 hours <- as.integer(commandArgs(trailingOnly = T))
-if (length(hours) == 0) hours <- 8
+if (length(hours) == 0) hours <- 12
 seconds <- hours * 60 * 60
 
 cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
@@ -69,7 +70,7 @@ tracks_grouped_comb <- tracks_grouped %>%
   summarize(genre_cat = genre_cat[1], rating = rating[1], duration = sum(duration), plays = plays[1], last_played = last_played[1])
 
 tracks_simp <- bind_rows(tracks_grouped_comb, tracks_ungrouped) %>%
-  filter(last_played > 1)
+  filter(last_played > 2)
 
 emp_props <- tracks_simp %>%
   group_by(genre_cat, rating) %>%
@@ -82,22 +83,24 @@ emp_props_mat <- emp_props %>%
   column_to_rownames("genre_cat") %>%
   as.matrix()
 
-rating_weights_df <- tribble(
-  ~rating, ~rating_w,
+rating_mults_df <- tribble(
+  ~rating, ~mult,
   3, 1,
-  4, 3,
-  5, 5
+  4, 1 / 3,
+  5, 1 / 5
+)
+
+gc_mults_df <- tibble(
+  genre_cat = rownames(emp_props_mat),
+  mult = rowSums(emp_props_mat) / c(0.375, 0.25, 0.375)
 )
 
 ideal_props1 <- sweep(emp_props_mat, MARGIN = 1, FUN = `/`, rowSums(emp_props_mat))
-ideal_props2 <- sweep(ideal_props1, MARGIN = 2, FUN = `*`, rating_weights_df$rating_w)
+ideal_props2 <- sweep(ideal_props1, MARGIN = 2, FUN = `/`, rating_mults_df$mult)
 ideal_props3 <- sweep(ideal_props2, MARGIN = 1, FUN = `/`, rowSums(ideal_props2))
 ideal_props4 <- ideal_props3 / sum(ideal_props3)
-ideal_props5 <- sweep(ideal_props4, MARGIN = 1, FUN = `*`, c(0.375, 0.25, 0.375))
+ideal_props5 <- sweep(ideal_props4, MARGIN = 1, FUN = `/`, gc_mults_df$mult)
 ideal_props <- ideal_props5 / sum(ideal_props5)
-
-gc_weights <- c(0.375, 0.25, 0.375) / rowSums(emp_props_mat)
-gc_weights_df <- tibble(genre_cat = names(gc_weights), gc_w = gc_weights)
 
 ideal_seconds <- as.data.frame(ideal_props * seconds) %>%
   rownames_to_column(var = "genre_cat") %>%
@@ -113,28 +116,49 @@ ideal_seconds_rating <- ideal_seconds %>%
   group_by(rating) %>%
   summarize(max_dur = sum(max_dur))
 
-make_q <- function(d, comp = F) {
-  q <- d / max(d)
-  q <- q - min(q) / 2
+make_q <- function(x, cuts, comp = F) {
+  uq <- unique(quantile(x, cuts))
+
+  if (length(uq) <= length(unique(x))) {
+    q <- rank(x, ties.method = "min")
+  } else {
+    q <- as.integer(cut(x, uq, include.lowest = T))
+  }
+
+  q <- q - min(q)
+  q <- q / max(q)
 
   if (comp) q <- 1 - q
-  return(q)
+  q
 }
 
-get_exponent <- Vectorize(function(x, y, w) {
-  f <- function (a, x, y, w) { x^a + y^(a * w) - 1 }
-  a_hat <- uniroot(f, interval = c(0, 10), x = x, y = y, w = w)
-  return(a_hat$root)
-}, vectorize.args = list("x", "y"), USE.NAMES = F)
+make_r <- function(q) {
+  r <- rank(q, ties.method = "random")
+  r <- r - min(r)
+  r <- r / max(r)
 
-plays_weight <- 5
+  r[is.nan(r)] <- 1
+  r
+}
+
+plays_weight <- 1
+
+compute_qrg <- function(d) {
+  even_cuts <- seq(0, 1, length.out = max(5, ceiling(nrow(d) / 20)))
+  decaying_cuts <- even_cuts^(1 / plays_weight)
+
+  d %>%
+    mutate(plays_q = make_q(plays, even_cuts, comp = T)) %>%
+    mutate(lp_q = make_q(last_played, even_cuts)) %>%
+    group_by(plays_q, add = T) %>%
+    mutate(pri = rank(-lp_q, ties.method = "random"))
+}
 
 gtracks_within <- tracks_simp %>%
+  split(group_indices(., genre_cat, rating)) %>%
+  map_dfr(compute_qrg) %>%
   group_by(genre_cat, rating) %>%
-  mutate(plays_q = make_q(plays, comp = T)) %>%
-  mutate(lp_q = make_q(last_played)) %>%
-  mutate(dfc = get_exponent(lp_q, plays_q, w = plays_weight)) %>%
-  arrange(genre_cat, rating, desc(dfc)) %>%
+  arrange(genre_cat, rating, pri, desc(plays_q), runif(n())) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
   left_join(ideal_seconds, by = c("genre_cat", "rating")) %>%
@@ -142,28 +166,38 @@ gtracks_within <- tracks_simp %>%
   ungroup()
 
 if (debug) {
-  g <- filter(gtracks_within, genre_cat == "Classical", rating == 3)
+  g <- gtracks_within %>% filter(genre_cat == "Other", rating == 3)
   p1 <- ggplot(g, aes(last_played, -plays, color = chosen, alpha = chosen)) +
-    geom_jitter(show.legend = F, size = 0.5) +
+    geom_jitter(show.legend = F, size = 1) +
     scale_color_manual(values = c("#88dddd", "#550000")) +
     scale_alpha_manual(values = c(0.5, 1)) +
     ggthemes::theme_few()
   p2 <- ggplot(g, aes(lp_q, plays_q, color = chosen, alpha = chosen)) +
-    geom_jitter(show.legend = F, size = 0.5) +
+    geom_jitter(show.legend = F, size = 1) +
     scale_color_manual(values = c("#88dddd", "#550000")) +
     scale_alpha_manual(values = c(0.5, 1)) +
     ggthemes::theme_few()
-  grid.arrange(p1, p2)
+  # p3 <- ggplot(g, aes(lp_r, plays_r, color = chosen, alpha = chosen)) +
+  #   geom_jitter(show.legend = F, size = 1) +
+  #   scale_color_manual(values = c("#88dddd", "#550000")) +
+  #   scale_alpha_manual(values = c(0.5, 1)) +
+  #   ggthemes::theme_few()
+  # p4 <- ggplot(g, aes(-pri, plays_q, color = chosen, alpha = chosen)) +
+  #   geom_jitter(show.legend = F, size = 1) +
+  #   scale_color_manual(values = c("#88dddd", "#550000")) +
+  #   scale_alpha_manual(values = c(0.5, 1)) +
+  #   ggthemes::theme_few()
+  grid.arrange(p1, p2, ncol = 2)
 }
 
 gtracks_within_gc <- tracks_simp %>%
+  left_join(rating_mults_df, by = "rating") %>%
+  mutate(plays = plays * mult) %>%
+  select(-mult) %>%
   group_by(genre_cat) %>%
-  mutate(plays_q = make_q(plays, comp = T)) %>%
-  mutate(lp_q = make_q(last_played)) %>%
-  mutate(dfc = get_exponent(lp_q, plays_q, w = plays_weight)) %>%
-  left_join(rating_weights_df, by = "rating") %>%
-  mutate(dfc_w = dfc * rating_w) %>%
-  arrange(genre_cat, desc(dfc_w)) %>%
+  compute_qrg() %>%
+  group_by(genre_cat) %>%
+  arrange(genre_cat, pri, desc(plays_q), runif(n())) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
   left_join(ideal_seconds_gc, by = "genre_cat") %>%
@@ -171,13 +205,13 @@ gtracks_within_gc <- tracks_simp %>%
   ungroup()
 
 gtracks_within_rating <- tracks_simp %>%
+  left_join(gc_mults_df, by = "genre_cat") %>%
+  mutate(plays = plays * mult) %>%
+  select(-mult) %>%
   group_by(rating) %>%
-  mutate(plays_q = make_q(plays, comp = T)) %>%
-  mutate(lp_q = make_q(last_played)) %>%
-  mutate(dfc = get_exponent(lp_q, plays_q, w = plays_weight)) %>%
-  left_join(gc_weights_df, by = "genre_cat") %>%
-  mutate(dfc_w = dfc * gc_w) %>%
-  arrange(rating, desc(dfc_w)) %>%
+  compute_qrg() %>%
+  group_by(rating) %>%
+  arrange(rating, pri, desc(plays_q), runif(n())) %>%
   mutate(cs = cumsum(duration)) %>%
   mutate(cs = lag(cs, default = 0)) %>%
   left_join(ideal_seconds_rating, by = "rating") %>%

@@ -24,12 +24,12 @@ zero_tracks <- com_tracks %>% group_by(uuid) %>% mutate(total_rating = sum(ratin
 artist_counts <- com_tracks %>% group_by(uuid, artist) %>% count() %>%
   ungroup() %>% select(-n) %>% count(artist)
 
-zero_tracks <- zero_tracks %>% semi_join(artist_counts %>% filter(n >= 2), by = "artist")
+zero_tracks <- zero_tracks %>% semi_join(artist_counts %>% filter(n >= 1), by = "artist")
 
 sizes <- zero_tracks %>%
   group_by(uuid) %>% summarize(size = sum(size)) %>%
   arrange(-size)
 
-bigs <- inner_join(zero_tracks, sizes[1:20,], by = "uuid") %>% arrange(-size.y)
+bigs <- inner_join(zero_tracks, sizes[1:25,], by = "uuid") %>% arrange(-size.y)
 
 write(paste0(c(bigs$id), collapse = ","), file = "~/Music/big_ids.txt")
