@@ -9,14 +9,6 @@ library(stringr)
 library(tibble)
 library(purrr)
 
-debug <- F
-# debug <- T
-if (debug) {
-  library(ggplot2)
-  library(gridExtra)
-  library(ggthemes)
-}
-
 assign_genre_cat <- Vectorize(function(genre) {
   if (grepl("Celtic|World|French|Galician", genre)) {
     return("Celtic")
@@ -28,7 +20,18 @@ assign_genre_cat <- Vectorize(function(genre) {
 }, USE.NAMES = F)
 
 hours <- as.integer(commandArgs(trailingOnly = T))
-if (length(hours) == 0) hours <- 3
+
+if (length(hours) == 0) {
+  hours <- 8
+
+  debug <- T
+  library(ggplot2)
+  library(gridExtra)
+  library(ggthemes)
+} else {
+  debug <- F
+}
+
 seconds <- hours * 60 * 60
 
 cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
@@ -127,7 +130,7 @@ make_q <- function(x, cuts) {
   q
 }
 
-exponent <- 2
+exponent <- 3
 
 compute_qrg <- function(d) {
   max_dur <- d$max_dur[1]
@@ -160,7 +163,7 @@ gtracks_within <- tracks_simp %>%
   map_dfr(compute_qrg)
 
 if (debug) {
-  g <- gtracks_within %>% filter(genre_cat == "Other", rating == 3)
+  g <- gtracks_within %>% filter(genre_cat == "Other", rating == 4)
   ggplot(g, aes(last_played, -plays, color = chosen, alpha = chosen)) +
     geom_jitter(show.legend = F, size = 1) +
     scale_color_manual(values = c("#88dddd", "#550000")) +
@@ -186,9 +189,8 @@ chosen_tracks <- tracks_simp %>%
 
 if (debug) {
   chosen_tracks %>% group_by(chosen_within, chosen_within_gc, chosen_within_rating) %>% count()
-  chosen_tracks %>% filter(genre_cat=="Celtic",rating==3)
-  chosen_tracks %>% filter(!chosen_within, chosen_within_gc, chosen_within_rating)
-  chosen_tracks %>% filter(chosen_within, !chosen_within_gc, !chosen_within_rating)
+  chosen_tracks %>% filter(!chosen_within, chosen_within_gc, chosen_within_rating) %>% count(genre_cat, rating)
+  chosen_tracks %>% filter(chosen_within, !chosen_within_gc, !chosen_within_rating) %>% count(genre_cat, rating)
   sum((chosen_tracks %>% filter(chosen))$duration) / seconds
 
   chosen_prop_mat <- chosen_tracks %>%
@@ -221,7 +223,7 @@ if (debug) {
       scale_color_manual(values = c("#88dddd", "#550000")) +
       scale_alpha_manual(values = c(0.5, 1)) +
       ggtitle(paste(grid_space$rating[i], grid_space$genre_cat[i])) +
-      xlim(c(0, max_lp)) + ylim(c(-max_plays, 0)) +
+      # xlim(c(0, max_lp)) + ylim(c(-max_plays, 0)) +
       ggthemes::theme_few()
     return(p)
   }
