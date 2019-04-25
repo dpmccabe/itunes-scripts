@@ -32,7 +32,8 @@ if (length(hours) == 0) {
   debug <- F
 }
 
-seconds <- hours * 60 * 60
+seconds <- 24 * 60 * 60
+seconds_to_export <- hours * 60 * 60
 
 cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
 
@@ -50,7 +51,7 @@ tracks <- kvs %>% unlist() %>% str_split(":=", simplify = T) %>% as_data_frame()
   select(id = `Track ID`, genre = Genre, duration = `Total Time`, rating = Rating, plays = `Play Count`,
          last_played = `Play Date UTC`, grouping = Grouping, no = `Track Number`) %>%
   mutate(last_played = (now - as.numeric(strptime(last_played, format = "%FT%TZ", tz = "GMT"))) / 60 / 60 / 24) %>%
-  type_convert %>%
+  type_convert() %>%
   mutate(genre_cat = assign_genre_cat(genre),
          duration = duration / 1000,
          no = ifelse(is.na(grouping), NA, no),
@@ -73,7 +74,7 @@ tracks_grouped_comb <- tracks_grouped %>%
   summarize(genre_cat = genre_cat[1], rating = rating[1], duration = sum(duration), plays = plays[1], last_played = last_played[1])
 
 tracks_simp <- bind_rows(tracks_grouped_comb, tracks_ungrouped) %>%
-  filter(last_played > 5)
+  filter((plays >= 5 & last_played > 5) | (plays < 5 & last_played > plays))
 
 emp_props <- tracks_simp %>%
   group_by(genre_cat, rating) %>%
@@ -89,21 +90,19 @@ emp_props_mat <- emp_props %>%
 rating_mults_df <- tribble(
   ~rating, ~mult,
   3, 1,
-  4, 1 / 3,
-  5, 1 / 5
+  4, 3,
+  5, 5
 )
 
 gc_mults_df <- tibble(
   genre_cat = rownames(emp_props_mat),
-  mult = rowSums(emp_props_mat) / c(0.375, 0.25, 0.375)
-)
+  mult = c(0.375, 0.25, 0.375) / rowSums(emp_props_mat)
+) %>% mutate(mult = mult / min(mult))
 
-ideal_props1 <- sweep(emp_props_mat, MARGIN = 1, FUN = `/`, rowSums(emp_props_mat))
-ideal_props2 <- sweep(ideal_props1, MARGIN = 2, FUN = `/`, rating_mults_df$mult)
-ideal_props3 <- sweep(ideal_props2, MARGIN = 1, FUN = `/`, rowSums(ideal_props2))
-ideal_props4 <- ideal_props3 / sum(ideal_props3)
-ideal_props5 <- sweep(ideal_props4, MARGIN = 1, FUN = `/`, gc_mults_df$mult)
-ideal_props <- ideal_props5 / sum(ideal_props5)
+mult_mat <- t(t(gc_mults_df$mult)) %*% t(rating_mults_df$mult)
+
+ideal_props <- emp_props_mat * mult_mat
+ideal_props <- ideal_props / sum(ideal_props)
 
 ideal_seconds <- as.data.frame(ideal_props * seconds) %>%
   rownames_to_column(var = "genre_cat") %>%
@@ -163,7 +162,7 @@ gtracks_within <- tracks_simp %>%
   map_dfr(compute_qrg)
 
 if (debug) {
-  g <- gtracks_within %>% filter(genre_cat == "Other", rating == 4)
+  g <- gtracks_within %>% filter(genre_cat == "Celtic", rating == 3)
   ggplot(g, aes(last_played, -plays, color = chosen, alpha = chosen)) +
     geom_jitter(show.legend = F, size = 1) +
     scale_color_manual(values = c("#88dddd", "#550000")) +
@@ -252,7 +251,7 @@ interleave <- function(d, arrange_col) {
       b1 = lag(j, default = 0),
       b2 = j
     ) %>%
-    mutate(j = runif(n(), b1, b2)) %>%
+    mutate(j =  (b1 + b2) / 2) %>%
     select(-b1, -b2)
 }
 
@@ -276,9 +275,12 @@ if (debug) {
     theme_few()
 }
 
+ptracks_joined <- arrange(ptracks_joined, j)
+ptracks_export <- ptracks_joined[seq_len(1 + sum(!(cumsum(ptracks_joined$duration) >= seconds_to_export))),]
+
 exploded_tracks <- bind_rows(tracks_ungrouped, tracks_grouped) %>%
   select(gid, id, no) %>%
-  inner_join(ptracks_joined, by = "gid") %>%
+  inner_join(ptracks_export, by = "gid") %>%
   mutate(id = ifelse(is.na(id), gid, id)) %>%
   arrange(j, no)
 
