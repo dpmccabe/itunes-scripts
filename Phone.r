@@ -1,3 +1,4 @@
+if (!("packrat" %in% loadedNamespaces())) source("packrat/init.R")
 rm(list = ls())
 Sys.setlocale('LC_ALL','C')
 # set.seed(1)
@@ -170,21 +171,21 @@ if (debug) {
     ggthemes::theme_few()
 }
 
-gtracks_within_rating <- tracks_simp %>%
-  left_join(ideal_seconds_rating, by = "rating") %>%
-  split(group_indices(., rating)) %>%
-  map_dfr(compute_qrg)
-
-gtracks_within_gc <- tracks_simp %>%
-  left_join(ideal_seconds_gc, by = "genre_cat") %>%
-  split(group_indices(., genre_cat)) %>%
-  map_dfr(compute_qrg)
+# gtracks_within_rating <- tracks_simp %>%
+#   left_join(ideal_seconds_rating, by = "rating") %>%
+#   split(group_indices(., rating)) %>%
+#   map_dfr(compute_qrg)
+#
+# gtracks_within_gc <- tracks_simp %>%
+#   left_join(ideal_seconds_gc, by = "genre_cat") %>%
+#   split(group_indices(., genre_cat)) %>%
+#   map_dfr(compute_qrg)
 
 chosen_tracks <- tracks_simp %>%
   mutate(chosen_within = gid %in% (gtracks_within %>% filter(chosen) %>% pull(gid)),
-         chosen_within_gc = gid %in% (gtracks_within_gc %>% filter(chosen) %>% pull(gid)),
-         chosen_within_rating = gid %in% (gtracks_within_rating %>% filter(chosen) %>% pull(gid)),
-         chosen = chosen_within | (chosen_within_rating & chosen_within_gc))
+         # chosen_within_gc = gid %in% (gtracks_within_gc %>% filter(chosen) %>% pull(gid)),
+         # chosen_within_rating = gid %in% (gtracks_within_rating %>% filter(chosen) %>% pull(gid)),
+         chosen = chosen_within)
 
 if (debug) {
   chosen_tracks %>% group_by(chosen_within, chosen_within_gc, chosen_within_rating) %>% count()
