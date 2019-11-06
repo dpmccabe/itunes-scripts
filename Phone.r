@@ -1,6 +1,7 @@
+setwd("~/Library/iTunes/Scripts")
 if (!("packrat" %in% loadedNamespaces())) source("packrat/init.R")
 rm(list = ls())
-Sys.setlocale('LC_ALL','C')
+Sys.setlocale('LC_ALL', 'C')
 # set.seed(1)
 
 library(dplyr)
@@ -25,38 +26,42 @@ hours <- as.integer(commandArgs(trailingOnly = T))
 if (length(hours) == 0) {
   hours <- 8
 
-  debug <- T
+  debug <- TRUE
   library(ggplot2)
   library(gridExtra)
   library(ggthemes)
 } else {
-  debug <- F
+  debug <- FALSE
 }
 
 seconds <- 24 * 60 * 60
 seconds_to_export <- hours * 60 * 60
 
-cn <- c("id", "duration", "rating", "plays", "last_played", "genre", "grouping", "no")
-
-starred <- read_lines("~/Music/starred.txt")
-
-kvs <- starred %>% str_split("\\t")
-n_kvs <- sapply(kvs, length)
+tracks <- read_delim(
+  "~/Music/starred.csv",
+  delim = ";",
+  col_types = cols(
+    id = col_character(),
+    no = col_double(),
+    duration = col_double(),
+    plays = col_double(),
+    rating = col_double(),
+    genre = col_character(),
+    grouping = col_character(),
+    last_played = col_datetime(format = "")
+  )
+)
 
 now <- as.numeric(Sys.time())
 
-tracks <- kvs %>% unlist() %>% str_split(":=", simplify = T) %>% as_data_frame() %>%
-  rename(k = V1, v = V2) %>%
-  mutate(ix = rep(1:length(kvs), times = n_kvs)) %>%
-  spread(key = k, value = v) %>%
-  select(id = `Track ID`, genre = Genre, duration = `Total Time`, rating = Rating, plays = `Play Count`,
-         last_played = `Play Date UTC`, grouping = Grouping, no = `Track Number`) %>%
-  mutate(last_played = (now - as.numeric(strptime(last_played, format = "%FT%TZ", tz = "GMT"))) / 60 / 60 / 24) %>%
-  type_convert() %>%
-  mutate(genre_cat = assign_genre_cat(genre),
-         duration = duration / 1000,
-         no = ifelse(is.na(grouping), NA, no),
-         rating = as.integer(rating / 20))
+tracks <- tracks %>%
+  mutate(last_played = (now - as.numeric(last_played)) / 60 / 60 / 24) %>%
+  mutate(
+    genre_cat = assign_genre_cat(genre),
+    duration = duration / 1000,
+    no = ifelse(is.na(grouping), NA, no),
+    rating = as.integer(rating / 20)
+  )
 
 tracks_ungrouped <- tracks %>%
   filter(is.na(grouping)) %>%
@@ -72,7 +77,13 @@ tracks_grouped <- tracks %>%
 
 tracks_grouped_comb <- tracks_grouped %>%
   group_by(gid) %>%
-  summarize(genre_cat = genre_cat[1], rating = rating[1], duration = sum(duration), plays = plays[1], last_played = last_played[1])
+  summarize(
+    genre_cat = genre_cat[1],
+    rating = rating[1],
+    duration = sum(duration),
+    plays = plays[1],
+    last_played = last_played[1]
+  )
 
 tracks_simp <- bind_rows(tracks_grouped_comb, tracks_ungrouped) %>%
   filter((plays >= 5 & last_played > 5) | (plays < 5 & last_played > plays))
@@ -109,7 +120,10 @@ ideal_seconds <- as.data.frame(ideal_props * seconds) %>%
   rownames_to_column(var = "genre_cat") %>%
   gather(`3`:`5`, key = "rating", value = "max_dur") %>%
   as_tibble() %>%
-  type_convert()
+  type_convert(col_types = cols(
+    genre_cat = col_character(),
+    rating = col_double())
+  )
 
 ideal_seconds_gc <- ideal_seconds %>%
   group_by(genre_cat) %>%
@@ -130,7 +144,7 @@ make_q <- function(x, cuts) {
   q
 }
 
-exponent <- 3
+exponent <- 4
 
 compute_qrg <- function(d) {
   max_dur <- d$max_dur[1]
@@ -182,10 +196,12 @@ if (debug) {
 #   map_dfr(compute_qrg)
 
 chosen_tracks <- tracks_simp %>%
-  mutate(chosen_within = gid %in% (gtracks_within %>% filter(chosen) %>% pull(gid)),
-         # chosen_within_gc = gid %in% (gtracks_within_gc %>% filter(chosen) %>% pull(gid)),
-         # chosen_within_rating = gid %in% (gtracks_within_rating %>% filter(chosen) %>% pull(gid)),
-         chosen = chosen_within)
+  mutate(
+    chosen_within = gid %in% (gtracks_within %>% filter(chosen) %>% pull(gid)),
+    # chosen_within_gc = gid %in% (gtracks_within_gc %>% filter(chosen) %>% pull(gid)),
+    # chosen_within_rating = gid %in% (gtracks_within_rating %>% filter(chosen) %>% pull(gid)),
+    chosen = chosen_within
+  )
 
 if (debug) {
   chosen_tracks %>% group_by(chosen_within, chosen_within_gc, chosen_within_rating) %>% count()
@@ -219,6 +235,7 @@ if (debug) {
       arrange(desc(chosen))
 
     p <- ggplot(d, aes(last_played, -plays, color = chosen, alpha = chosen)) +
+      ggplot(d, aes(last_played, -plays, color = chosen, alpha = chosen)) +
       geom_jitter(show.legend = F, size = 0.5) +
       scale_color_manual(values = c("#88dddd", "#550000")) +
       scale_alpha_manual(values = c(0.5, 1)) +
@@ -245,15 +262,14 @@ ptracks <- filter(chosen_tracks, chosen) %>%
 ptracks_gcr <- split(ptracks, ptracks$gc_rating)
 
 interleave <- function(d, arrange_col) {
-  d %>%
+  d2 <- d %>%
     arrange_(arrange_col) %>%
-    mutate(j = 1:n() / n()) %>%
-    mutate(
-      b1 = lag(j, default = 0),
-      b2 = j
-    ) %>%
-    mutate(j =  (b1 + b2) / 2) %>%
-    select(-b1, -b2)
+    mutate(j = 1:n() / n())
+
+  max_offset <- d2$j[1]
+  this_offset <- runif(1, 0, max_offset)
+  d2$j <- d2$j - this_offset
+  d2
 }
 
 ptracks_gcr_j <- lapply(ptracks_gcr, interleave, arrange_col = "uuid")
@@ -266,7 +282,17 @@ ptracks_joined <- bind_rows(ptracks_gcr_j) %>%
 
 ptracks_gc <- split(ptracks_joined, ptracks_joined$genre_cat)
 
-ptracks_gc_j <- lapply(ptracks_gc, interleave, arrange_col = "l")
+interleave2 <- function(d, arrange_col) {
+  d %>%
+    arrange_(arrange_col) %>%
+    mutate(j = 1:n() / n()) %>%
+    mutate(b1 = lag(j, default = 0),
+           b2 = j) %>%
+    mutate(j =  (b1 + b2) / 2) %>%
+    select(-b1, -b2)
+}
+
+ptracks_gc_j <- lapply(ptracks_gc, interleave2, arrange_col = "l")
 
 ptracks_joined <- bind_rows(ptracks_gc_j)
 

@@ -1,7 +1,7 @@
+if (!("packrat" %in% loadedNamespaces())) source("packrat/init.R")
 rm(list = ls())
 Sys.setlocale('LC_ALL','C')
 
-library(plyr)
 library(dplyr)
 library(readr)
 library(tidyr)
