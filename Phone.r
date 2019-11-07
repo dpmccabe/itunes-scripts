@@ -1,5 +1,4 @@
 setwd("~/Library/iTunes/Scripts")
-if (!("packrat" %in% loadedNamespaces())) source("packrat/init.R")
 rm(list = ls())
 Sys.setlocale('LC_ALL', 'C')
 # set.seed(1)
