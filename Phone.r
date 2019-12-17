@@ -149,13 +149,14 @@ compute_qrg <- function(d) {
   max_dur <- d$max_dur[1]
   nbins <- 1
 
-  while (T) {
+  while (TRUE) {
     even_cuts <- seq(0, 1, length.out = nbins + 1)
     decaying_cuts <- even_cuts^(exponent)
 
     d_chosen <- d %>%
-      mutate(plays_q = make_q(plays + runif(n(), 0, 0.1), decaying_cuts)) %>%
-      group_by(plays_q, add = T) %>%
+      mutate(x = plays + runif(n(), 0, 0.1)) %>%
+      mutate(plays_q = make_q(x, decaying_cuts)) %>%
+      group_by(plays_q, add = TRUE) %>%
       mutate(chosen = rank(-last_played, ties.method = "random") == 1)
 
     d_time <- sum(d_chosen[d_chosen$chosen, "duration"])
